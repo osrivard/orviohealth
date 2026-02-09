@@ -1,0 +1,193 @@
+// Prisma schema for Orvio Clinic Portal (MVP)
+// This is intentionally modular for:
+// - multiple orgs (clinics, pharmacies)
+// - future additional pharmacies
+// - future database merge (global UUIDs)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrgType { CLINIC PHARMACY }
+enum Role { CLINIC_ADMIN CLINIC_STAFF PHARMACY_ADMIN PHARMACY_STAFF }
+
+enum Language { FR EN }
+enum Sex { M F X }
+
+enum Diagnosis {
+  DMLA
+  OMD
+  OVCR
+  OBVR
+  MCNV
+  NVC_MYOPIQUE
+  AUTRE
+}
+
+enum Medication {
+  EYLEA_PFS_2MG
+  LUCENTIS_05MG
+  OZURDEX_07MG
+  BEOVU_6MG
+  VABYSMO_6MG
+}
+
+enum Eye { OD OG OU }
+enum CaseStatus { DRAFT SENT SIGNED FAXED ARCHIVED }
+
+model Organization {
+  id        String  @id @default(uuid())
+  type      OrgType
+  name      String
+  createdAt DateTime @default(now())
+
+  memberships Membership[]
+}
+
+model User {
+  id        String  @id @default(uuid())
+  email     String  @unique
+  name      String?
+  passwordHash String
+  // Optional: tie each doctor to their DocuSign user ID for embedded signing.
+  docusignUserId String?
+  createdAt DateTime @default(now())
+
+  memberships Membership[]
+}
+
+model Membership {
+  id        String @id @default(uuid())
+  userId    String
+  orgId     String
+  role      Role
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  org  Organization @relation(fields: [orgId], references: [id])
+
+  @@index([orgId, role])
+}
+
+model Patient {
+  id          String   @id @default(uuid()) // stable for merges
+  firstName   String
+  lastName    String
+  dob         DateTime
+  sex         Sex?
+  ramqNumber  String?  // Québec
+  phone       String?
+  cell        String?
+  email       String?
+  preferredLanguage Language @default(FR)
+
+  addressLine1 String?
+  city         String?
+  province     String?
+  postalCode   String?
+
+  createdAt DateTime @default(now())
+  cases     Case[]
+}
+
+model Case {
+  id          String @id @default(uuid())
+  patientId   String
+  clinicOrgId String
+  pharmacyOrgId String   // default Kevin Boivin for now; modular later
+  status      CaseStatus @default(DRAFT)
+  language    Language   @default(FR)
+
+  // --- Structured clinical fields (from your forms) ---
+  diagnosis   Diagnosis
+  diagnosisOther String?
+  medication  Medication
+  eye         Eye
+  injectionDoses Int?    // 1 or 2
+
+  // Insurance
+  insurancePublic Boolean @default(false)
+  insurancePrivate Boolean @default(false)
+  insuranceSelfPay Boolean @default(false)
+  privateInsurer String?
+  privateGroup   String?
+  privateCert    String?
+
+  // Eye-Q/NOW contact prefs
+  bestTimeMorning Boolean @default(false)
+  bestTimeAfternoon Boolean @default(false)
+  bestTimeEvening Boolean @default(false)
+  canLeaveMessage Boolean?
+
+  preferEmail Boolean @default(false)
+  preferPhone Boolean @default(false)
+  preferCell  Boolean @default(false)
+
+  // Consent flags
+  consentInfoShare Boolean @default(false)
+  consentInsurerContact Boolean @default(false)
+  offeredUsualPharmacy Boolean @default(false)
+  consentKevinBoivinExec Boolean @default(true)
+  patientSelfHandlesColdChain Boolean @default(false)
+
+  // Envelope + stored docs
+  envelope Envelope?
+  documents Document[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@index([clinicOrgId, status])
+  @@index([pharmacyOrgId, status])
+}
+
+model Envelope {
+  id            String @id @default(uuid())
+  caseId        String @unique
+  provider      String @default("mock") // mock | docusign
+  providerEnvelopeId String? @unique
+  status        String @default("created")
+  sentAt        DateTime?
+  completedAt   DateTime?
+
+  case Case @relation(fields: [caseId], references: [id])
+}
+
+enum DocType { EYEQNOW_ENROLLMENT PHARMACY_CONSENT PRESCRIPTION }
+
+model Document {
+  id          String @id @default(uuid())
+  caseId      String
+  type        DocType
+  language    Language
+  templateVersion String?
+  storageKey  String    // local path or S3 key
+  sha256      String?
+  signedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  case Case @relation(fields: [caseId], references: [id])
+
+  @@index([caseId, type])
+}
+
+model AuditEvent {
+  id        String @id @default(uuid())
+  at        DateTime @default(now())
+  orgId     String
+  userId    String
+  action    String
+  entityType String
+  entityId  String
+  metaJson  String?
+
+  @@index([orgId, at])
+  @@index([entityType, entityId])
+}
